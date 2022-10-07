@@ -41,7 +41,8 @@ def heads_api():
             return False
     [wrap(Bucket=bucket, Key=f) for f in [file_path]* 1000]
 
-### 'HEAD' requests 
+### 'HEAD' requests
+## 2.4 sec
 def heads_requests():
   import requests
   ses = requests.Session()
