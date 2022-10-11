@@ -167,7 +167,7 @@ def http_pipelining(urls, method = 'HEAD', buffer_size=1024*1024, timeout=2, hea
 
 def http_pipelining_with_retries(   urls, method = 'HEAD', 
                                     buffer_size=1024*1024, timeout=2,
-                                    max_retries=1, backoff_factor=2, status_forcelist=[ 500, 502, 503, 504 ], headers={}):
+                                    max_retries=2, backoff_factor=2, status_forcelist=[ 500, 502, 503, 504 ], headers={}):
     total_ex = None
     total_responses = []
     backoff = backoff_factor
@@ -196,10 +196,10 @@ def http_pipelining_with_retries(   urls, method = 'HEAD',
             ready_resps = getattr(ex, 'ready_responses', None)
             if ready_resps:
                 handled = [r for r in ready_resps if r.status_code < 500]
-                handled_urls = [r.url for r in handled]
-                urls_to_perform = [ u for u in urls_to_perform if not handled_urls ]
+                need_urls = urls_to_perform
+                urls_to_perform = [ u for u in need_urls if not u in handled_urls ]
                 total_responses += handled
-                warnings.warn(f'exclude complete urls from {len(handled)} to {len(urls_to_perform)}')
+                warnings.warn(f'exclude complete urls from {len(urls)} to {len(urls_to_perform)}')
                 if not len(urls_to_perform): break
             total_ex = ex
             time.sleep(backoff)
