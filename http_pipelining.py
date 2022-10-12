@@ -4,10 +4,10 @@ HTTP pipelining is a feature of HTTP/1.1 which allows multiple HTTP requests
   to be sent over a single TCP connection without waiting for the corresponding responses
   https://en.wikipedia.org/wiki/HTTP_pipelining
 """
-
+#%%
 import socket
 import ssl
-from typing import Tuple
+from typing import List, Tuple
 import requests
 
 import time
@@ -168,14 +168,41 @@ def http_pipelining(urls, method = 'HEAD', buffer_size=1024*1024, timeout=2, hea
 def http_pipelining_with_retries(   urls, method = 'HEAD', 
                                     buffer_size=1024*1024, timeout=2,
                                     max_retries=2, backoff_factor=2, status_forcelist=[ 500, 502, 503, 504 ], headers={}):
-    total_ex = None
-    total_responses = []
-    backoff = backoff_factor
-    urls_to_perform = urls
-    for it in range(0, max_retries):
-        _debug(f'{it} attempt of {max_retries}')
+    
+    def handle_ex(ex: Exception, need_urls: List[str]) -> tuple[
+            Exception,
+            List[requests.Response],
+            List[str]]:
+        
+        reduced_urls = need_urls
+        handled = []
+        
+        ready_resps = getattr(ex, 'ready_responses', None)
+        if not ready_resps:
+            return ex, handled, reduced_urls
+        
+        handled = [r for r in ready_resps if r.status_code < 500]
+        handled_urls = {r.url for r in handled}
+        reduced_urls = [ u for u in need_urls if not u in handled_urls ]
+        warnings.warn(f'exclude complete urls from {len(urls)} to {len(reduced_urls)}')
+        
+        if not len(reduced_urls):
+            return None, handled, reduced_urls
+        
+        return ex, handled, reduced_urls
+    
+    def check_responses(responses):
+        resps = [r for r in responses if r.status_code in status_forcelist]
+        if not len(resps):
+            return responses
+        
+        ex = RuntimeError("Response with code from forcelist")
+        ex.ready_responses = responses
+        ex.forcelist_responses = resps
+        raise ex
+
+    def exec_iter(it, urls_to_perform):
         try:
-            total_ex = None
             responses = http_pipelining(
                     urls_to_perform, 
                     method, 
@@ -183,29 +210,33 @@ def http_pipelining_with_retries(   urls, method = 'HEAD',
                     timeout=timeout,
                     headers=headers,
                 )
-            resps = [r for r in responses if r.status_code in status_forcelist]
-            if len(resps):
-                ex = RuntimeError("Response with code from forcelist")
-                ex.ready_responses = responses
-                ex.forcelist_responses = resps
-                raise ex
-            total_responses += responses
-            break
+            return check_responses(responses), None, []
         except Exception as ex:
             warnings.warn(f'exception on {it} attempt {ex}')
-            ready_resps = getattr(ex, 'ready_responses', None)
-            if ready_resps:
-                handled = [r for r in ready_resps if r.status_code < 500]
-                need_urls = urls_to_perform
-                urls_to_perform = [ u for u in need_urls if not u in handled_urls ]
-                total_responses += handled
-                warnings.warn(f'exclude complete urls from {len(urls)} to {len(urls_to_perform)}')
-                if not len(urls_to_perform): break
-            total_ex = ex
-            time.sleep(backoff)
-            backoff += it * backoff_factor
-    if total_ex:
-        raise total_ex
-    return total_responses
+            cur_ex, handled, reduced_urls = handle_ex(ex, urls_to_perform)
+            if not cur_ex:
+                return handled, None, []
+            return handled, cur_ex, reduced_urls
+
+    def exec():
+        total_ex = None
+        total_responses = []
+        backoff = backoff_factor
+        urls_to_perform = urls
+
+        for it in range(0, max_retries):
+            _debug(f'{it} attempt of {max_retries}')
+            resps, total_ex, urls_to_perform = exec_iter(it, urls_to_perform)
+            total_responses += resps
+            if total_ex:
+                _debug(f'sleep {backoff}')
+                time.sleep(backoff)
+                backoff += it * backoff_factor
+
+        if total_ex:
+            raise total_ex
+        return total_responses
+
+    return exec()
 
 # %%
